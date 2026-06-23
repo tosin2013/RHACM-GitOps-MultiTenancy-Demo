@@ -1,0 +1,171 @@
+{
+  "realm": "sso",
+  "enabled": true,
+  "groups": [
+    { "name": "blue-sre-group", "path": "/blue-sre-group" },
+    { "name": "red-sre-group", "path": "/red-sre-group" },
+    { "name": "blue-viewer-group", "path": "/blue-viewer-group" },
+    { "name": "red-viewer-group", "path": "/red-viewer-group" },
+    { "name": "acm-sre-group", "path": "/acm-sre-group" },
+    { "name": "acm-viewer-group", "path": "/acm-viewer-group" }
+  ],
+  "clients": [
+    {
+      "clientId": "idp-4-ocp",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "JPhsRcVazN",
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": true,
+      "redirectUris": ["*"],
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "groups",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "firstName": "Admin",
+      "lastName": "Demo",
+      "email": "admin@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["admin"],
+      "groups": ["/acm-sre-group"]
+    },
+    {
+      "username": "bluesre1",
+      "enabled": true,
+      "firstName": "Blue",
+      "lastName": "SRE1",
+      "email": "bluesre1@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/blue-sre-group"]
+    },
+    {
+      "username": "bluesre2",
+      "enabled": true,
+      "firstName": "Blue",
+      "lastName": "SRE2",
+      "email": "bluesre2@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/blue-sre-group"]
+    },
+    {
+      "username": "redsre1",
+      "enabled": true,
+      "firstName": "Red",
+      "lastName": "SRE1",
+      "email": "redsre1@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/red-sre-group"]
+    },
+    {
+      "username": "redsre2",
+      "enabled": true,
+      "firstName": "Red",
+      "lastName": "SRE2",
+      "email": "redsre2@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/red-sre-group"]
+    },
+    {
+      "username": "blueviewer1",
+      "enabled": true,
+      "firstName": "Blue",
+      "lastName": "Viewer1",
+      "email": "blueviewer1@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/blue-viewer-group"]
+    },
+    {
+      "username": "blueviewer2",
+      "enabled": true,
+      "firstName": "Blue",
+      "lastName": "Viewer2",
+      "email": "blueviewer2@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/blue-viewer-group"]
+    },
+    {
+      "username": "redviewer1",
+      "enabled": true,
+      "firstName": "Red",
+      "lastName": "Viewer1",
+      "email": "redviewer1@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/red-viewer-group"]
+    },
+    {
+      "username": "redviewer2",
+      "enabled": true,
+      "firstName": "Red",
+      "lastName": "Viewer2",
+      "email": "redviewer2@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/red-viewer-group"]
+    },
+    {
+      "username": "acmsre1",
+      "enabled": true,
+      "firstName": "ACM",
+      "lastName": "SRE1",
+      "email": "acmsre1@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/acm-sre-group"]
+    },
+    {
+      "username": "acmsre2",
+      "enabled": true,
+      "firstName": "ACM",
+      "lastName": "SRE2",
+      "email": "acmsre2@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/acm-sre-group"]
+    },
+    {
+      "username": "acmviewer1",
+      "enabled": true,
+      "firstName": "ACM",
+      "lastName": "Viewer1",
+      "email": "acmviewer1@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/acm-viewer-group"]
+    },
+    {
+      "username": "acmviewer2",
+      "enabled": true,
+      "firstName": "ACM",
+      "lastName": "Viewer2",
+      "email": "acmviewer2@demo.redhat.com",
+      "credentials": [{ "type": "password", "value": "openshift", "temporary": false }],
+      "realmRoles": ["user"],
+      "groups": ["/acm-viewer-group"]
+    }
+  ]
+}

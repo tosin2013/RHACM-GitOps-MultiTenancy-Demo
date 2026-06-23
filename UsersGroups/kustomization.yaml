@@ -5,3 +5,5 @@ resources:
   - users.yaml
   - groups.yaml
   - htpasswd.yaml
+  # oauth-oidc.yaml is applied by scripts/setup-users.sh when Keycloak is detected
+  # keycloak-realm.json is imported into Keycloak by the same script
