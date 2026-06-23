@@ -236,6 +236,82 @@ oc get clusterimageset | grep multi-appsub | sort -V | tail -5
 
 ---
 
+## Principal Shows applicationsCount=0
+
+### Applications stuck in terminating state
+
+**Symptom:** Principal logs show `applicationsCount=0` for all agents despite Applications existing in `fleet-gitops`.
+
+**Root Cause:** Applications have a `deletionTimestamp` set with finalizers blocking deletion. The informer ignores terminating resources.
+
+**Diagnosis:**
+```bash
+oc get applications.argoproj.io -n fleet-gitops -o jsonpath='{range .items[*]}{.metadata.name}: {.metadata.deletionTimestamp}{"\n"}{end}'
+```
+
+**Fix:** Remove finalizers from stuck apps:
+```bash
+for app in $(oc get applications.argoproj.io -n fleet-gitops -o jsonpath='{.items[*].metadata.name}'); do
+  oc patch application.argoproj.io $app -n fleet-gitops --type merge -p '{"metadata":{"finalizers":null}}'
+done
+```
+
+### AppProject missing `destinations[].name` field
+
+**Symptom:** Principal trace logs show apps added to send queue but `mapAppProjectToAgents` returns empty (no "Added appProject to send queue" messages).
+
+**Root Cause:** For destination-based mapping, AppProjects must have a `name` field in their `destinations` that matches agent names.
+
+**Fix:**
+```bash
+oc patch appproject default -n fleet-gitops --type merge \
+  -p '{"spec":{"destinations":[{"namespace":"*","server":"*","name":"*"}]}}'
+```
+
+### Agent rejects apps: "namespace not in allowed namespaces list"
+
+**Symptom:** Agent logs show `Error creating application: namespace fleet-gitops is not permitted: not in allowed namespaces list`
+
+**Root Cause:** The agent doesn't have `fleet-gitops` in its allowed namespaces. In destination-based mapping, the agent creates apps in the same namespace as the Principal.
+
+**Fix:**
+```bash
+oc patch argocd agent-argocd -n argocd-agent-<name> --type merge \
+  -p '{"spec":{"argoCDAgent":{"agent":{"allowedNamespaces":["fleet-gitops"]}}}}'
+```
+
+### Spoke app-controller: "namespace X is not managed"
+
+**Symptom:** Apps on spoke show `Unknown` sync status with condition `Failed to load live state: namespace "X" is not managed`.
+
+**Root Cause:** The cluster secret's `namespaces` field restricts which namespaces ArgoCD can manage.
+
+**Fix:** Add target namespaces to the cluster secret:
+```bash
+KUBECONFIG=/tmp/<cluster>-kubeconfig oc patch secret agent-argocd-default-cluster-config \
+  -n argocd-agent-<name> --type merge \
+  -p '{"stringData":{"namespaces":"argocd-agent-<name>,fleet-gitops,<target-ns-1>,<target-ns-2>"}}'
+```
+
+Also label the target namespaces:
+```bash
+oc label namespace <target-ns> argocd.argoproj.io/managed-by=agent-argocd
+```
+
+### Spoke app-controller: "cannot list applications at cluster scope"
+
+**Symptom:** Controller logs show RBAC forbidden errors for listing Applications cluster-wide.
+
+**Root Cause:** When `ARGOCD_APPLICATION_NAMESPACES` is set, the controller attempts a cluster-wide list/watch.
+
+**Fix:**
+```bash
+KUBECONFIG=/tmp/<cluster>-kubeconfig oc adm policy add-cluster-role-to-user cluster-admin \
+  system:serviceaccount:argocd-agent-<name>:agent-argocd-argocd-application-controller
+```
+
+---
+
 ## ACM Policy NonCompliant
 
 ### Check policy details

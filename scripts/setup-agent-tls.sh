@@ -342,10 +342,38 @@ echo "--- Red Agent Connection Log ---"
 KUBECONFIG="$RED_KUBECONFIG" oc logs -n "$RED_NS" -l app.kubernetes.io/component=agent --tail=5 2>/dev/null || echo "  (pod not ready yet)"
 echo ""
 
+echo "=== Configuring namespace management on spokes ==="
+
+for SPOKE_KC in "$BLUE_KUBECONFIG" "$RED_KUBECONFIG"; do
+  SPOKE_NS=$(KUBECONFIG="$SPOKE_KC" oc get argocd -A -o jsonpath='{.items[0].metadata.namespace}')
+  echo "Configuring $SPOKE_NS..."
+
+  # Enable destination-based mapping with createNamespace
+  KUBECONFIG="$SPOKE_KC" oc patch argocd agent-argocd -n "$SPOKE_NS" --type merge \
+    -p '{"spec":{"argoCDAgent":{"agent":{"allowedNamespaces":["fleet-gitops"]}}}}' 2>/dev/null || true
+
+  # Set ARGOCD_APPLICATION_NAMESPACES on controller
+  KUBECONFIG="$SPOKE_KC" oc patch argocd agent-argocd -n "$SPOKE_NS" --type merge \
+    -p '{"spec":{"controller":{"env":[{"name":"ARGOCD_APPLICATION_NAMESPACES","value":"fleet-gitops"}]}}}' 2>/dev/null || true
+
+  # Grant cluster-admin to app controller SA for cross-namespace watches
+  KUBECONFIG="$SPOKE_KC" oc adm policy add-cluster-role-to-user cluster-admin \
+    "system:serviceaccount:${SPOKE_NS}:agent-argocd-argocd-application-controller" 2>/dev/null || true
+done
+
+echo "=== Configuring Redis proxy on hub ==="
+oc patch configmap argocd-cmd-params-cm -n "$PRINCIPAL_NS" --type merge \
+  -p '{"data":{"redis.server":"fleet-argocd-agent-principal-redisproxy:6379"}}' 2>/dev/null || true
+
 echo "=== TLS Setup Complete ==="
 echo ""
 echo "Principal route (passthrough): $PRINCIPAL_ROUTE"
 echo "Certificates managed by: cert-manager (auto-rotation enabled)"
+echo ""
+echo "Post-setup steps:"
+echo "  1. Create AppProjects on spoke clusters (in the agent namespace)"
+echo "  2. Label target namespaces: oc label ns <name> argocd.argoproj.io/managed-by=agent-argocd"
+echo "  3. Add target namespaces to cluster secret's 'namespaces' field"
 echo ""
 echo "If agents still show TLS errors, verify:"
 echo "  1. The Principal pod has restarted and loaded the new cert"

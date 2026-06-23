@@ -175,6 +175,72 @@ This model is simpler but creates a hub bottleneck at scale and requires the hub
 
 ---
 
+## Principal Routing Mechanics
+
+### How Applications Flow from Hub to Spoke
+
+When `destinationBasedMapping=true`, the Principal routes applications based on `spec.destination.name`:
+
+```mermaid
+sequenceDiagram
+    participant AppSet as ApplicationSet Controller
+    participant Principal as Principal (hub)
+    participant Agent as Agent (spoke)
+    participant Controller as App Controller (spoke)
+
+    AppSet->>Principal: Creates Application in fleet-gitops ns
+    Note over Principal: Informer detects new Application
+    Principal->>Principal: getAgentNameForApp() reads spec.destination.name
+    Principal->>Principal: Maps app to agent via cluster secret
+    Principal->>Agent: Streams Application spec via gRPC
+    Agent->>Agent: Creates Application in fleet-gitops ns on spoke
+    Controller->>Controller: Detects app, fetches from Git, syncs to target ns
+    Controller->>Agent: Reports sync status
+    Agent->>Principal: Streams status back via gRPC
+    Principal->>Principal: Redis proxy serves status to hub UI
+```
+
+### Key Configuration Requirements
+
+1. **AppProject `destinations[].name` must include agent names** - The Principal uses this field to determine which agents should receive an AppProject. Use `name: "*"` for wildcard matching.
+
+2. **`allowedNamespaces` on Principal** - Controls which namespaces the Principal's informer watches for Application resources. Set via `spec.argoCDAgent.principal.namespace.allowedNamespaces` on the ArgoCD CR.
+
+3. **Destination-based mapping on both sides** - Both Principal (`ARGOCD_PRINCIPAL_DESTINATION_BASED_MAPPING=true`) and Agent (`ARGOCD_AGENT_DESTINATION_BASED_MAPPING=true`, `ARGOCD_AGENT_CREATE_NAMESPACE=true`) must enable this.
+
+4. **Agent `allowedNamespaces`** - The agent needs permission to create apps in the Principal's namespace (`fleet-gitops`) since that's where apps arrive on the spoke. Set via `spec.argoCDAgent.agent.allowedNamespaces` on the agent ArgoCD CR.
+
+5. **Cluster secret `namespaces` field** - On spoke clusters, the in-cluster secret must list all target namespaces the app-controller can deploy to. The operator manages this based on namespace labels.
+
+6. **`ARGOCD_APPLICATION_NAMESPACES` on spoke controllers** - Required when apps live in a different namespace than the ArgoCD instance (e.g., apps in `fleet-gitops`, controller in `argocd-agent-blue-cluster`).
+
+7. **Redis proxy for hub UI** - The hub ArgoCD server must use the Principal's Redis proxy (`fleet-argocd-agent-principal-redisproxy:6379`) to display real sync status from spoke clusters.
+
+### Namespace Topology
+
+```
+Hub Cluster:
+  fleet-gitops/
+    ├── ArgoCD Principal (controller disabled)
+    ├── ApplicationSets (generate apps here)
+    ├── Applications (routed to agents)
+    └── AppProjects (define tenant boundaries)
+
+Spoke Cluster (blue):
+  argocd-agent-blue-cluster/
+    ├── ArgoCD Agent (connects to Principal)
+    ├── Application Controller (syncs apps)
+    └── AppProjects (blue-team, default)
+  fleet-gitops/
+    └── Applications (received from Principal, processed by controller)
+  mobileapp/
+    └── Deployed resources (synced by controller)
+  platform-config/
+    └── Deployed resources (synced by controller)
+```
+
+---
+
 ## References
 
 - [Fleet-Scale GitOps Control Flow with RHACM](https://medium.com/@tcij1013/fleet-scale-gitops-control-flow-with-red-hat-advanced-cluster-management-0eca855136c3)
