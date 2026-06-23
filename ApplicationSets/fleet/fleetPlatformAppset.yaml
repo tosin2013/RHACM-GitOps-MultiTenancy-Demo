@@ -22,7 +22,7 @@ spec:
         path: PlatformConfig/baseline
       destination:
         namespace: platform-config
-        name: "{{name}}"
+        name: "argocd-agent-{{name}}"
       syncPolicy:
         syncOptions:
           - CreateNamespace=true
