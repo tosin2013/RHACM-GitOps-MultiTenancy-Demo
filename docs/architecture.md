@@ -87,6 +87,43 @@ graph TB
 
 ---
 
+## Why There Is No ArgoCD UI on Spoke Clusters
+
+A common point of confusion: if you log into a spoke cluster and try to access an ArgoCD UI, **you won't find one**. This is intentional.
+
+In the Principal/Agent model, the spoke ArgoCD instance is **headless** — the server component is explicitly disabled:
+
+```yaml
+# Agent ArgoCD CR on spoke
+spec:
+  server:
+    enabled: false   # No UI, no route, no API server
+```
+
+### What runs where
+
+| Component | Hub (Principal) | Spoke (Agent) |
+|-----------|----------------|---------------|
+| ArgoCD Server (UI + API) | **Enabled** — single pane of glass | **Disabled** — headless |
+| Application Controller | **Disabled** — no local reconciliation | **Enabled** — performs all Git-to-cluster sync |
+| ApplicationSet Controller | **Enabled** — generates Application CRs | N/A |
+| Agent gRPC component | Principal endpoint (listens) | Agent (initiates outbound connection) |
+
+### How to view application status
+
+- **Primary method**: Log into the **hub ArgoCD UI** — it shows all applications across all clusters with real-time status streamed from agents via the Redis proxy.
+- **CLI alternative** (on spoke): `oc get applications.argoproj.io -n fleet-gitops` shows local sync/health status.
+- **Hub CLI**: `oc get applications.argoproj.io -n fleet-gitops` on the hub shows the same aggregated view as the UI.
+
+### Why this design?
+
+1. **Security** — No exposed API surface on spoke clusters; the agent only initiates outbound connections
+2. **Simplicity** — One dashboard to manage hundreds of clusters, no per-cluster logins
+3. **Resource efficiency** — No server/UI pods consuming resources on every spoke
+4. **Consistent RBAC** — Tenant access control is enforced once (on the hub) via AppProjects, not replicated per-cluster
+
+---
+
 ## Multi-Tenancy Model
 
 Tenant isolation is achieved through ArgoCD AppProjects within the single Principal instance:
