@@ -33,15 +33,29 @@ spec:
                   name: fleet-gitops
             - complianceType: musthave
               objectDefinition:
-                apiVersion: argoproj.io/v1alpha1
+                apiVersion: argoproj.io/v1beta1
                 kind: ArgoCD
                 metadata:
                   name: fleet-argocd
                   namespace: fleet-gitops
                 spec:
+                  controller:
+                    enabled: false
+                  argoCDAgent:
+                    principal:
+                      enabled: true
+                      logLevel: "info"
+                      auth: "mtls:CN=([^,]+)"
+                      tls:
+                        insecureGenerate: false
+                  sourceNamespaces:
+                    - "argocd-agent-blue-cluster"
+                    - "argocd-agent-red-cluster"
                   applicationSet: {}
-                  dex:
-                    openShiftOAuth: true
+                  sso:
+                    provider: dex
+                    dex:
+                      openShiftOAuth: true
                   server:
                     route:
                       enabled: true

@@ -1,0 +1,183 @@
+# Fleet-Scale GitOps Architecture
+
+## Overview
+
+This project implements fleet-wide GitOps using Red Hat Advanced Cluster Management (RHACM 2.15) and OpenShift GitOps. It demonstrates two architectural models for managing applications across multiple OpenShift clusters:
+
+- **Phase 1 (Push Model)** — A centralized `fleet-argocd` instance on the hub pushes manifests to downstream clusters (`main` branch)
+- **Phase 2 (Principal/Agent Model)** — A decentralized pull architecture where each spoke runs a lightweight ArgoCD Agent (`fleetdev` branch)
+
+---
+
+## Architecture Evolution
+
+| Aspect | Phase 1: Push Model | Phase 2: Principal/Agent |
+|--------|---------------------|--------------------------|
+| Reconciliation | Hub pushes to spokes via API | Spokes pull from hub via gRPC |
+| Credentials | Hub stores spoke kubeconfigs | No hub-side credentials stored |
+| Network | Hub needs outbound to spoke APIs | Spoke initiates outbound only |
+| Scalability | Linear with cluster count (hub bottleneck) | Offloaded to spokes |
+| Security | Hub is credential store (single point of failure) | mTLS zero-trust |
+| Failure domain | Hub failure = all spokes lose sync | Spokes continue reconciling independently |
+
+---
+
+## Phase 2: Principal/Agent Architecture (Active)
+
+```mermaid
+graph TB
+    subgraph hub [Hub Cluster - fleet-gitops namespace]
+        ACM[RHACM 2.15]
+        Principal[ArgoCD Principal<br/>controller: disabled<br/>argoCDAgent.principal: true]
+        AppSets[ApplicationSets<br/>clusterDecisionResource generator]
+        UI[ArgoCD UI + Route<br/>Single Pane of Glass]
+        CA[mTLS Root CA]
+
+        ACM -->|Policy Enforce| Principal
+        Principal --> AppSets
+        Principal --> UI
+        CA -->|Validates agents| Principal
+    end
+
+    subgraph git [Git Repositories]
+        PlatformRepo[PlatformConfig/baseline]
+        BlueRepo[BlueApplications/mobileApp]
+        RedRepo[RedApplications/galaga]
+    end
+
+    subgraph blueSpoke [blue-cluster - argocd-agent-blue-cluster ns]
+        BlueAgent[ArgoCD Agent<br/>server: disabled<br/>reconciles locally]
+        BlueCert[Leaf cert CN=blue-cluster]
+        BlueApps[mobileapp + platform-baseline]
+
+        BlueAgent --> BlueApps
+    end
+
+    subgraph redSpoke [red-cluster - argocd-agent-red-cluster ns]
+        RedAgent[ArgoCD Agent<br/>server: disabled<br/>reconciles locally]
+        RedCert[Leaf cert CN=red-cluster]
+        RedApps[galaga + platform-baseline]
+
+        RedAgent --> RedApps
+    end
+
+    PlatformRepo --> Principal
+    BlueRepo --> Principal
+    RedRepo --> Principal
+
+    BlueAgent -->|"gRPC mTLS (outbound only)"| Principal
+    RedAgent -->|"gRPC mTLS (outbound only)"| Principal
+    Principal -.->|Stream Application spec| BlueAgent
+    Principal -.->|Stream Application spec| RedAgent
+    BlueAgent -.->|Stream sync status| Principal
+    RedAgent -.->|Stream sync status| Principal
+```
+
+### Component Responsibilities
+
+| Component | Location | Role |
+|-----------|----------|------|
+| **ArgoCD Principal** | Hub — `fleet-gitops` namespace | UI, ApplicationSet controller, gRPC endpoint. Application controller is **disabled**. |
+| **ArgoCD Agent** | Each spoke — `argocd-agent-<name>` namespace | Local reconciler. Applies manifests using its own ServiceAccount. Streams status to Principal. |
+| **ACM Policies** | Hub — `acm-gitops-policy` namespace | Enforce GitOps operator install, Principal CR, cluster registrations |
+| **GitOpsCluster + Placements** | Hub — `fleet-gitops` namespace | Cluster discovery and targeting for ApplicationSets |
+| **ApplicationSets** | Hub — `fleet-gitops` namespace | Generate per-cluster Application CRs from Placement decisions |
+| **AppProjects** | Hub — `fleet-gitops` namespace | Tenant isolation (RBAC boundaries) within Principal UI |
+| **mTLS CA** | Hub secret + leaf certs on each spoke | Mutual authentication for Principal-Agent gRPC tunnel |
+
+---
+
+## Multi-Tenancy Model
+
+Tenant isolation is achieved through ArgoCD AppProjects within the single Principal instance:
+
+```
+fleet-argocd Principal (fleet-gitops namespace on hub)
+├── AppProject: default    → platform-baseline → all clusters        (acm-sre-group: admin)
+├── AppProject: blue-team  → mobile-app         → blueclusterset     (blue-sre-group: admin)
+└── AppProject: red-team   → galaga             → redclusterset      (red-sre-group: admin)
+```
+
+### Access Control
+
+| User | Group | Sees in fleet-argocd UI |
+|------|-------|-------------------------|
+| acmsre1 | acm-sre-group | All applications across all clusters |
+| bluesre1 | blue-sre-group | `mobileapp-*` applications only (blue-team project) |
+| redsre1 | red-sre-group | `galaga-*` applications only (red-team project) |
+| acmviewer1 | acm-viewer-group | All applications (read-only) |
+
+---
+
+## Security and Communication Model
+
+```mermaid
+graph LR
+    subgraph trustChain [mTLS Trust Chain]
+        RootCA[Root CA<br/>fleet-argocd-ca]
+        HubCert[Hub Certificate<br/>signed by CA]
+        BlueCert[Blue Leaf Cert<br/>CN=blue-cluster]
+        RedCert[Red Leaf Cert<br/>CN=red-cluster]
+
+        RootCA --> HubCert
+        RootCA --> BlueCert
+        RootCA --> RedCert
+    end
+
+    subgraph network [Network Flow]
+        SpokeOut[Spoke initiates<br/>outbound TCP:443]
+        HubIn[Principal listens<br/>on gRPC endpoint]
+        NoInbound[No inbound to spokes<br/>Zero firewall exceptions]
+
+        SpokeOut --> HubIn
+    end
+
+    subgraph credentials [Credential Model]
+        NoKubeconfig[Hub stores NO<br/>spoke kubeconfigs]
+        AgentSA[Agent uses local SA<br/>with namespace-scoped RBAC]
+        LeastPriv[Principal: read-only Git<br/>Agent: local namespace only]
+    end
+```
+
+### Key Security Properties
+
+1. **Zero-trust networking** — Spokes initiate all connections; no inbound firewall rules needed
+2. **No stored credentials** — Hub never stores spoke kubeconfigs
+3. **Mutual authentication** — Both Principal and Agent present certificates signed by the shared CA
+4. **Least-privilege** — Agent ServiceAccount has only namespace-scoped permissions
+5. **Independent failure domains** — If the hub goes down, spokes continue reconciling their last-known state
+
+---
+
+## Phase 1: Push Model (Legacy — `main` branch)
+
+In the push model, a single `fleet-argocd` instance on the hub runs a full application controller that directly pushes manifests to each downstream cluster via stored kubeconfigs:
+
+```mermaid
+graph TB
+    subgraph hub [Hub Cluster]
+        FleetArgo[fleet-argocd<br/>full app controller]
+        AppSets[ApplicationSets]
+
+        FleetArgo --> AppSets
+    end
+
+    subgraph spokes [Spoke Clusters]
+        BC1[blue-cluster]
+        RC1[red-cluster]
+    end
+
+    FleetArgo -->|Push via kubeconfig| BC1
+    FleetArgo -->|Push via kubeconfig| RC1
+```
+
+This model is simpler but creates a hub bottleneck at scale and requires the hub to store credentials for every downstream cluster.
+
+---
+
+## References
+
+- [Fleet-Scale GitOps Control Flow with RHACM](https://medium.com/@tcij1013/fleet-scale-gitops-control-flow-with-red-hat-advanced-cluster-management-0eca855136c3)
+- [RHACM Documentation](https://access.redhat.com/documentation/en-us/red_hat_advanced_cluster_management_for_kubernetes/2.15)
+- [OpenShift GitOps Documentation](https://docs.openshift.com/gitops/latest/understanding_openshift_gitops/about-redhat-openshift-gitops.html)
+- [RHACM Workshop — Module 01](https://tosin2013.github.io/rhacm-workshop/modules/01-installation.html)

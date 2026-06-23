@@ -17,7 +17,7 @@ spec:
     spec:
       project: default
       source:
-        repoURL: https://github.com/bharathi-tenneti/RHACM-GitOps-MultiTenancy-Demo.git
+        repoURL: https://github.com/tosin2013/RHACM-GitOps-MultiTenancy-Demo.git
         targetRevision: fleetdev
         path: PlatformConfig/baseline
       destination:

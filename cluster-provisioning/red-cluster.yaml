@@ -1,0 +1,139 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: red-cluster
+---
+apiVersion: hive.openshift.io/v1
+kind: ClusterDeployment
+metadata:
+  name: red-cluster
+  namespace: red-cluster
+  labels:
+    cloud: AWS
+    region: us-east-2
+    vendor: OpenShift
+spec:
+  baseDomain: sandbox2287.opentlc.com
+  clusterName: red-cluster
+  controlPlaneConfig:
+    servingCertificates: {}
+  installAttemptsLimit: 1
+  installed: false
+  platform:
+    aws:
+      credentialsSecretRef:
+        name: aws-credentials
+      region: us-east-2
+  provisioning:
+    installConfigSecretRef:
+      name: red-cluster-install-config
+    sshPrivateKeySecretRef:
+      name: red-cluster-ssh-private-key
+    imageSetRef:
+      name: img4.21.20-multi-appsub
+  pullSecretRef:
+    name: pull-secret
+---
+apiVersion: hive.openshift.io/v1
+kind: MachinePool
+metadata:
+  name: red-cluster-worker
+  namespace: red-cluster
+spec:
+  clusterDeploymentRef:
+    name: red-cluster
+  name: worker
+  platform:
+    aws:
+      rootVolume:
+        iops: 100
+        size: 120
+        type: gp3
+      type: m6i.2xlarge
+  replicas: 0
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: red-cluster-install-config
+  namespace: red-cluster
+type: Opaque
+stringData:
+  install-config.yaml: |
+    apiVersion: v1
+    metadata:
+      name: red-cluster
+    baseDomain: sandbox2287.opentlc.com
+    controlPlane:
+      architecture: amd64
+      hyperthreading: Enabled
+      name: master
+      replicas: 1
+      platform:
+        aws:
+          type: m6i.2xlarge
+          rootVolume:
+            iops: 4000
+            size: 120
+            type: io1
+    compute:
+    - architecture: amd64
+      hyperthreading: Enabled
+      name: worker
+      replicas: 0
+      platform:
+        aws:
+          type: m6i.2xlarge
+          rootVolume:
+            iops: 2000
+            size: 120
+            type: io1
+    networking:
+      networkType: OVNKubernetes
+      clusterNetwork:
+      - cidr: 10.128.0.0/14
+        hostPrefix: 23
+      machineNetwork:
+      - cidr: 10.0.0.0/16
+      serviceNetwork:
+      - 172.30.0.0/16
+    platform:
+      aws:
+        region: us-east-2
+    pullSecret: ""
+    sshKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQCzuV7R6Gr+89aw9f6Of9K6jsqxsNpOjOCpDF3Dq50g1hrkX8A4BuKWUTKNUWH3+MHRRrQBkZh9tGWk8N7pC1a9CHe4jhXoxPemGU0170Cmvny9ZUvPOuDEUDEWkQBuFR6X0XVAxsFusl1oh2JrElDvDCB1tyVA3iMPXGsOmxBEih/nrWKPntAeHt3iIe04YgFwcOYi7GlpR93uK3JaDu64p1UoNGBH3OP2OzFpaUCTW5rLFCk2DMixWOTDeur64RGWBK4tal2wLu+miYGkRcYs57l1UKXuVzx8tOwyOgWOZf2OkDiS8uN5/nQGIxhss/mn59xT6FhVuEI24b4xbC703KCGTkYXU+BnrvvudRonGenrBULI3QkHzvwaB8xBGQhphNjoojddrWaYXGWazImuXCJMGCsdYFmGL/wyzKPhDP09ggqNovOD9eWbasDcF8ntG47cVQreFTUxXQvKAre2bIcVGZaPBuiHICALZC501l2/BYVV4hUwXyLh4pG55evXMgxCPW499fie+0bOwSOLCtYdMq+QTWNf/rbZu75q9lkLbVYF1oglif5U4Pj+7DRkmU2qcITPTZwpUDPvyqmKVi3R5eth5j3PIM5pQPzkmQQj/5UeAEc98CI6/zkTXmCcMeAly7SC4zMYiU+66+UQHuJMbWkReVyStLiC1GfdNQ== vpcuser@rhacm-gitops-demo"
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: red-cluster
+  labels:
+    cloud: Amazon
+    region: us-east-2
+    vendor: OpenShift
+    cluster.open-cluster-management.io/clusterset: redclusterset
+spec:
+  hubAcceptsClient: true
+---
+apiVersion: agent.open-cluster-management.io/v1
+kind: KlusterletAddonConfig
+metadata:
+  name: red-cluster
+  namespace: red-cluster
+spec:
+  clusterName: red-cluster
+  clusterNamespace: red-cluster
+  clusterLabels:
+    cloud: Amazon
+    vendor: OpenShift
+  applicationManager:
+    enabled: true
+  certPolicyController:
+    enabled: true
+  iamPolicyController:
+    enabled: true
+  policyController:
+    enabled: true
+  searchCollector:
+    enabled: true

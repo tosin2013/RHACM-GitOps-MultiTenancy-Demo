@@ -1,0 +1,23 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd-agent-red-cluster
+---
+apiVersion: argoproj.io/v1beta1
+kind: ArgoCD
+metadata:
+  name: agent-argocd
+  namespace: argocd-agent-red-cluster
+spec:
+  server:
+    enabled: false
+  argoCDAgent:
+    agent:
+      enabled: true
+      client:
+        principalServerAddress: "fleet-argocd-agent-principal-fleet-gitops.apps.cluster-48qth.dynamic2.redhatworkshops.io"
+        principalServerPort: "443"
+      tls:
+        rootCASecretName: argocd-agent-ca
+        secretName: argocd-agent-client-tls
