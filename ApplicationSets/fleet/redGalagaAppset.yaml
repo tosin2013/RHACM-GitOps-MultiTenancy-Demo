@@ -22,7 +22,7 @@ spec:
         path: galaga
       destination:
         namespace: galaga
-        server: "{{server}}"
+        name: "{{name}}"
       syncPolicy:
         syncOptions:
           - CreateNamespace=true

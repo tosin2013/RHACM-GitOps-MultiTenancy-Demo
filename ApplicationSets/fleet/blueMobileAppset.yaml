@@ -22,7 +22,7 @@ spec:
         path: mobileApplication
       destination:
         namespace: mobileapp
-        server: "{{server}}"
+        name: "{{name}}"
       syncPolicy:
         syncOptions:
           - CreateNamespace=true
