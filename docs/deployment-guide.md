@@ -40,7 +40,20 @@ See [RHPDS Quickstart](rhpds-quickstart.md) for environment-specific details.
 - SSH keypair for cluster node access
 - `oc` CLI installed and authenticated to the hub cluster
 
-## Step 1: Login and Verify Hub
+## Manual Deployment Steps
+
+The steps below mirror what `scripts/deploy-demo.sh` does automatically.
+They are organized into three phases:
+
+```
+Phase A: Hub Setup (Steps 1-4)     — can start immediately
+Phase B: Spoke Clusters (Steps 5-6) — requires AWS quota validation
+Phase C: Agent + Apps (Steps 7-9)   — requires spoke clusters to be ready
+```
+
+---
+
+### Step 1: Login and Verify Hub
 
 ```bash
 oc login --token=<your-token> --server=https://<hub-api-endpoint>:6443
@@ -51,7 +64,35 @@ oc get csv -n open-cluster-management | grep advanced-cluster-management
 
 Expected: `multiclusterhub` status is `Running`, CSV shows `Succeeded`.
 
-## Step 2: Create AWS Credential
+### Step 2: Deploy Users and Auth
+
+The `setup-users.sh` script auto-detects Keycloak or falls back to htpasswd:
+
+```bash
+bash scripts/setup-users.sh --password 'YourPassword'
+```
+
+See [User Management](user-management.md) for details on Keycloak vs htpasswd modes.
+
+### Step 3: Install GitOps Operator and Deploy Principal
+
+```bash
+oc apply -k ./AcmPolicies/InstallGitOpsOperator
+
+# Wait for GitOps operator (~2 minutes)
+oc get csv -n openshift-gitops -w
+
+oc apply -k ./AcmPolicies/FleetArgoCD
+oc apply -k ./AcmPolicies/RegisterAllClustersToFleet
+```
+
+Verify the Principal is running:
+
+```bash
+oc get pods -n fleet-gitops -l app.kubernetes.io/part-of=argocd
+```
+
+### Step 4: Create AWS Credential and ManagedClusterSets
 
 ```bash
 oc create namespace aws-credentials --dry-run=client -o yaml | oc apply -f -
@@ -67,11 +108,7 @@ oc create secret generic aws-credentials -n aws-credentials \
 oc label secret aws-credentials -n aws-credentials \
   cluster.open-cluster-management.io/type=aws \
   cluster.open-cluster-management.io/credentials=""
-```
 
-## Step 3: Create ManagedClusterSets
-
-```bash
 oc apply -f - <<'EOF'
 apiVersion: cluster.open-cluster-management.io/v1beta2
 kind: ManagedClusterSet
@@ -85,15 +122,54 @@ metadata:
 EOF
 ```
 
-## Step 4: Provision Spoke Clusters
+---
 
-Run the pre-deployment check:
+### Step 5: Pre-Deployment Check (IMPORTANT)
+
+Before provisioning spoke clusters, validate that your AWS account can support them.
+The `pre-deploy-check.sh` script validates:
+
+- **Elastic IP quota** — Each SNO cluster needs 3 EIPs (one per AZ for NAT gateways). Two clusters = 6 EIPs minimum.
+- **vCPU quota** — Each `m6i.2xlarge` needs 8 vCPUs (16 total for both clusters).
+- **Orphaned resources** — Releases unassociated EIPs from previous failed deployments.
+- **ClusterImageSet** — Confirms the required OCP image version exists on the hub.
+- **AWS CLI** — Installs the AWS CLI if missing (reads credentials from the ACM secret).
 
 ```bash
 bash cluster-provisioning/pre-deploy-check.sh
 ```
 
-Copy secrets and provision:
+**If the script reports NOT READY**, address the issues before proceeding:
+
+| Issue | Resolution |
+|-------|-----------|
+| EIP quota too low | Script offers to request a quota increase (auto-approved in ~5 min) |
+| Orphaned EIPs | Script offers to release unassociated EIPs |
+| ClusterImageSet missing | Create one: `oc apply -f cluster-provisioning/clusterimageset.yaml` |
+| vCPU quota too low | Request increase via AWS console (may take hours) |
+
+### Step 6: Provision Spoke Clusters
+
+**Option A: Use templates (recommended for fresh environments):**
+
+If your base domain differs from what's in the YAML files, generate from templates:
+
+```bash
+export BASE_DOMAIN=$(oc get ingress.config cluster -o jsonpath='{.spec.domain}' | sed 's/^apps\.//')
+export SSH_PUBLIC_KEY=$(cat ~/.ssh/id_rsa.pub)
+export CLUSTER_IMAGE_SET="img4.21.20-multi-appsub"  # adjust to available version
+
+envsubst < cluster-provisioning/blue-cluster.yaml.tpl > /tmp/blue-cluster.yaml
+envsubst < cluster-provisioning/red-cluster.yaml.tpl > /tmp/red-cluster.yaml
+```
+
+**Option B: Use existing YAMLs (if base domain already matches):**
+
+```bash
+# Skip envsubst, use files directly
+```
+
+**Prepare namespaces and deploy:**
 
 ```bash
 for NS in blue-cluster red-cluster; do
@@ -111,184 +187,112 @@ for NS in blue-cluster red-cluster; do
     --dry-run=client -o yaml | oc apply -f -
 done
 
+# Apply (use /tmp/ files if generated from templates, or repo files directly)
 oc apply -f cluster-provisioning/blue-cluster.yaml
 oc apply -f cluster-provisioning/red-cluster.yaml
 ```
 
-Monitor provisioning (~30-45 min):
+**Monitor provisioning** (~30-45 minutes for SNO clusters):
 
 ```bash
 watch oc get clusterdeployment -A
+# Or check ManagedCluster status:
+watch oc get managedcluster
 ```
 
-## Step 5: Deploy Users, Groups, and RBAC
+Wait until both clusters show `AVAILABLE=True` before proceeding to Step 7.
+
+---
+
+### Step 7: Setup mTLS and Deploy Agents
+
+Once both spoke clusters are `AVAILABLE=True`, extract their kubeconfigs and run the TLS setup:
 
 ```bash
-oc create secret generic htpass-secret \
-  --from-file=htpasswd=./UsersGroups/htpasswd -n openshift-config
-oc apply -k ./UsersGroups
-oc adm policy add-cluster-role-to-group cluster-admin acm-sre-group
-oc adm policy add-cluster-role-to-group view acm-viewer-group
-```
+# Extract kubeconfigs from Hive secrets
+BLUE_SECRET=$(oc get clusterdeployment blue-cluster -n blue-cluster \
+  -o jsonpath='{.spec.clusterMetadata.adminKubeconfigSecretRef.name}')
+RED_SECRET=$(oc get clusterdeployment red-cluster -n red-cluster \
+  -o jsonpath='{.spec.clusterMetadata.adminKubeconfigSecretRef.name}')
 
-## Step 6: Install GitOps Operator and Deploy Principal
+oc get secret "$BLUE_SECRET" -n blue-cluster -o jsonpath='{.data.kubeconfig}' \
+  | base64 -d > /tmp/blue-cluster-kubeconfig
+oc get secret "$RED_SECRET" -n red-cluster -o jsonpath='{.data.kubeconfig}' \
+  | base64 -d > /tmp/red-cluster-kubeconfig
 
-```bash
-oc apply -k ./AcmPolicies/InstallGitOpsOperator
-# Wait for openshift-gitops pods to be Running
-oc get pods -n openshift-gitops -w
-
-oc apply -k ./AcmPolicies/FleetArgoCD
-oc apply -k ./AcmPolicies/RegisterAllClustersToFleet
-```
-
-## Step 7: Setup mTLS Certificates (cert-manager — Recommended)
-
-The recommended approach uses cert-manager to automate certificate lifecycle:
-
-```bash
+# Run the TLS + Agent deployment script
 bash scripts/setup-agent-tls.sh \
   --blue-kubeconfig /tmp/blue-cluster-kubeconfig \
   --red-kubeconfig /tmp/red-cluster-kubeconfig
 ```
 
-This script:
-1. Installs the cert-manager operator (if missing)
-2. Creates a CA Issuer chain in the `fleet-gitops` namespace
+This single script handles everything:
+1. Installs cert-manager operator on the hub (if missing)
+2. Creates a CA Issuer chain in `fleet-gitops`
 3. Discovers the Principal passthrough route automatically
-4. Issues server and client certificates
-5. Deploys certs and Agent CRs to both spoke clusters
+4. Issues server certificate for the Principal
+5. Issues client certificates for each agent (CN=blue-cluster, CN=red-cluster)
+6. Deploys TLS secrets to spoke clusters
+7. Creates the ArgoCD Agent CRs on each spoke cluster
+8. Grants necessary RBAC on spoke clusters
 
 For more details, see [ArgoCD Agent Installation Guide](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.20/html-single/argo_cd_agent_installation/).
 
 <details>
 <summary>Alternative: Manual OpenSSL certificates (deprecated)</summary>
 
+If cert-manager is unavailable, you can generate static certificates:
+
 ```bash
 bash certs/generate-certs.sh
 ```
 
-Create secrets on the hub:
-
-```bash
-CERT_DIR=certs/generated
-
-oc create secret generic argocd-agent-ca -n fleet-gitops \
-  --from-file=ca.crt="$CERT_DIR/ca.crt"
-
-oc create secret tls argocd-agent-principal-tls -n fleet-gitops \
-  --cert="$CERT_DIR/hub.crt" --key="$CERT_DIR/hub.key"
-
-oc create secret tls argocd-agent-resource-proxy-tls -n fleet-gitops \
-  --cert="$CERT_DIR/hub.crt" --key="$CERT_DIR/hub.key"
-
-openssl genrsa -out /tmp/jwt.key 2048
-oc create secret generic argocd-agent-jwt -n fleet-gitops \
-  --from-file=jwt.key=/tmp/jwt.key
-rm /tmp/jwt.key
-```
-
-> **Note:** This method requires manual certificate rotation and does not handle Agent CR deployment.
-> Prefer `scripts/setup-agent-tls.sh` for production use.
+Then manually create secrets and deploy agents per the instructions in `certs/generate-certs.sh` output.
+This method requires manual certificate rotation and separate Agent CR deployment.
 
 </details>
 
-Grant Principal RBAC:
+### Step 8: Deploy ApplicationSets and Configure RBAC
 
 ```bash
-oc apply -f - <<'EOF'
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: fleet-argocd-agent-principal
-rules:
-  - apiGroups: ["argoproj.io"]
-    resources: ["applications", "applicationsets", "appprojects"]
-    verbs: ["*"]
-  - apiGroups: [""]
-    resources: ["secrets", "configmaps", "events"]
-    verbs: ["*"]
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: fleet-argocd-agent-principal
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: fleet-argocd-agent-principal
-subjects:
-  - kind: ServiceAccount
-    name: fleet-argocd-agent-principal
-    namespace: fleet-gitops
-EOF
-```
-
-## Step 8: Deploy ApplicationSets
-
-```bash
+# ApplicationSets (generates Applications per placement)
 oc apply -k ./ApplicationSets/fleet
-```
 
-## Step 9: Configure RBAC
-
-```bash
+# ArgoCD RBAC (maps OpenShift groups to ArgoCD roles)
 oc patch configmap argocd-rbac-cm -n fleet-gitops --type merge \
   -p '{"data":{"policy.csv":"g, acm-sre-group, role:admin\ng, acm-viewer-group, role:readonly\n","policy.default":"role:","scopes":"[groups]"}}'
 
+# ACM ManagedClusterSet RBAC (per-team cluster access)
 oc adm policy add-cluster-role-to-group open-cluster-management:managedclusterset:admin:blueclusterset blue-sre-group
 oc adm policy add-cluster-role-to-group open-cluster-management:managedclusterset:view:blueclusterset blue-viewer-group
 oc adm policy add-cluster-role-to-group open-cluster-management:managedclusterset:admin:redclusterset red-sre-group
 oc adm policy add-cluster-role-to-group open-cluster-management:managedclusterset:view:redclusterset red-viewer-group
 ```
 
-## Step 10: Deploy Agents (after clusters are ready)
-
-Once spoke clusters show `AVAILABLE=True`:
+### Step 9: Validate
 
 ```bash
-oc label managedcluster blue-cluster cluster.open-cluster-management.io/clusterset=blueclusterset
-oc label managedcluster red-cluster cluster.open-cluster-management.io/clusterset=redclusterset
-```
-
-Deploy Agent CRs on each spoke (requires login to each spoke cluster):
-
-```bash
-# Login to blue-cluster
-oc login --server=https://api.blue-cluster.<domain>:6443
-oc apply -f agents/blue-cluster-agent.yaml
-oc create secret generic argocd-agent-tls -n argocd-agent-blue-cluster \
-  --from-file=ca.crt=certs/generated/ca.crt \
-  --from-file=tls.crt=certs/generated/blue-agent.crt \
-  --from-file=tls.key=certs/generated/blue-agent.key
-oc apply -f agents/network-policy.yaml
-
-# Login to red-cluster
-oc login --server=https://api.red-cluster.<domain>:6443
-oc apply -f agents/red-cluster-agent.yaml
-oc create secret generic argocd-agent-tls -n argocd-agent-red-cluster \
-  --from-file=ca.crt=certs/generated/ca.crt \
-  --from-file=tls.crt=certs/generated/red-agent.crt \
-  --from-file=tls.key=certs/generated/red-agent.key
-oc apply -f agents/network-policy.yaml
-```
-
-## Step 11: Validate
-
-```bash
-# Back on hub
-oc login --server=https://<hub-api>:6443
-
+# Check managed clusters
 oc get managedclusters
-oc get pods -n fleet-gitops
-oc get placementdecision -n fleet-gitops
-oc get applications.argoproj.io -n fleet-gitops
+# Expected: blue-cluster and red-cluster show AVAILABLE=True
 
-# Get the Principal UI URL
-oc get route fleet-argocd-server -n fleet-gitops
+# Check Principal pods
+oc get pods -n fleet-gitops
+# Expected: All pods Running
+
+# Check applications are synced
+oc get applications.argoproj.io -n fleet-gitops
+# Expected: All show Synced/Healthy
+
+# Get the ArgoCD UI URL
+oc get route fleet-argocd-server -n fleet-gitops -o jsonpath='{.spec.host}'
 ```
 
-Expected: All Applications show `Synced` and `Healthy`.
+Login to the ArgoCD UI with `admin` and the password from:
+
+```bash
+oc get secret fleet-argocd-cluster -n fleet-gitops \
+  -o jsonpath='{.data.admin\.password}' | base64 -d
+```
+
+Expected: All Applications show `Synced` and `Healthy` across both spoke clusters.

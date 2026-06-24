@@ -50,7 +50,20 @@ bash scripts/deploy-demo.sh --password 'MySecurePass123!'
 
 # Custom pull-secret location
 bash scripts/deploy-demo.sh --pull-secret /path/to/pull-secret.json
+
+# Override the auto-detected base domain for spoke provisioning
+bash scripts/deploy-demo.sh --base-domain sandbox1234.opentlc.com
 ```
+
+### Base Domain Detection
+
+The script auto-detects the base domain by stripping the hub's cluster-specific prefix:
+- Hub ingress: `apps.cluster-xb7dm.dynamic2.redhatworkshops.io`
+- Detected base domain: `dynamic2.redhatworkshops.io`
+- Spoke clusters will be: `blue-cluster.dynamic2.redhatworkshops.io`
+
+The script will prompt you to confirm this is correct before provisioning. If it detects
+the wrong domain, use `--base-domain` to override it explicitly.
 
 ## Expected Timeline
 

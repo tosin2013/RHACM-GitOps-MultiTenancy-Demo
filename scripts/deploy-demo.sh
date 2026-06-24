@@ -16,6 +16,7 @@ set -euo pipefail
 #   --dry-run          Show what would be done without executing
 #   --password PASS    Password for demo users (default: $USER_PASSWORD or "openshift")
 #   --pull-secret PATH Path to pull-secret.json (default: ~/pull-secret.json)
+#   --base-domain DOM  Override auto-detected base domain for spoke provisioning
 #   --help             Show this help message
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +28,7 @@ SKIP_TLS=false
 DRY_RUN=false
 USER_PASSWORD="${USER_PASSWORD:-openshift}"
 PULL_SECRET="${PULL_SECRET:-$HOME/pull-secret.json}"
+BASE_DOMAIN_OVERRIDE="${BASE_DOMAIN:-}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -36,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)       DRY_RUN=true; shift ;;
     --password)      USER_PASSWORD="$2"; shift 2 ;;
     --pull-secret)   PULL_SECRET="$2"; shift 2 ;;
+    --base-domain)   BASE_DOMAIN_OVERRIDE="$2"; shift 2 ;;
     --help)
       head -20 "$0" | grep "^#" | sed 's/^# \?//'
       exit 0
@@ -83,15 +86,39 @@ HUB_API=$(oc whoami --show-server)
 HUB_USER=$(oc whoami)
 CONSOLE_URL=$(oc whoami --show-console 2>/dev/null || echo "unknown")
 
-# Extract base domain from the cluster's ingress config
-BASE_DOMAIN=$(oc get ingress.config cluster -o jsonpath='{.spec.domain}' 2>/dev/null | sed 's/^apps\.//')
-APPS_DOMAIN="apps.${BASE_DOMAIN}"
+# Extract base domain for spoke cluster provisioning.
+# The hub's ingress domain is like: apps.cluster-xb7dm.dynamic2.redhatworkshops.io
+# The hub's own domain is:          cluster-xb7dm.dynamic2.redhatworkshops.io
+# For spoke provisioning we need the PARENT: dynamic2.redhatworkshops.io
+# (Hive creates spokes as blue-cluster.<BASE_DOMAIN>)
+HUB_DOMAIN=$(oc get ingress.config cluster -o jsonpath='{.spec.domain}' 2>/dev/null | sed 's/^apps\.//')
+APPS_DOMAIN="apps.${HUB_DOMAIN}"
+
+if [[ -n "$BASE_DOMAIN_OVERRIDE" ]]; then
+  BASE_DOMAIN="$BASE_DOMAIN_OVERRIDE"
+else
+  BASE_DOMAIN=$(echo "$HUB_DOMAIN" | sed 's/^[^.]*\.//')
+fi
 
 echo "  Hub API:      $HUB_API"
 echo "  Logged in as: $HUB_USER"
 echo "  Console:      $CONSOLE_URL"
-echo "  Base Domain:  $BASE_DOMAIN"
+echo "  Hub Domain:   $HUB_DOMAIN"
+echo "  Base Domain:  $BASE_DOMAIN (for spoke provisioning)"
 echo "  Apps Domain:  $APPS_DOMAIN"
+echo ""
+echo "  Spoke clusters will be provisioned as:"
+echo "    blue-cluster.$BASE_DOMAIN"
+echo "    red-cluster.$BASE_DOMAIN"
+
+if ! $SKIP_CLUSTERS && ! $DRY_RUN; then
+  echo ""
+  read -rp "  Is this base domain correct for spoke provisioning? [Y/n] " answer
+  if [[ "$answer" =~ ^[Nn]$ ]]; then
+    read -rp "  Enter the correct base domain: " BASE_DOMAIN
+    echo "  Updated base domain: $BASE_DOMAIN"
+  fi
+fi
 
 # Detect Keycloak
 KEYCLOAK_DETECTED=false
