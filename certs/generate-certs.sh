@@ -1,6 +1,23 @@
 #!/bin/bash
 set -euo pipefail
 
+# DEPRECATED: This script generates static OpenSSL certificates that require
+# manual rotation and manual secret deployment to spoke clusters.
+#
+# Prefer: scripts/setup-agent-tls.sh
+#   - Uses cert-manager operator for automated certificate lifecycle
+#   - Auto-discovers the Principal route address
+#   - Deploys certs AND Agent CRs to spoke clusters in one step
+#
+# This script is retained for environments where cert-manager is unavailable.
+
+echo "WARNING: certs/generate-certs.sh is deprecated."
+echo "  Recommended: bash scripts/setup-agent-tls.sh"
+echo "  (uses cert-manager for automated certificate lifecycle)"
+echo ""
+read -rp "Continue with manual OpenSSL certificate generation? [y/N] " answer
+[[ "$answer" =~ ^[Yy]$ ]] || exit 0
+
 CERT_DIR="$(cd "$(dirname "$0")" && pwd)/generated"
 mkdir -p "$CERT_DIR"
 

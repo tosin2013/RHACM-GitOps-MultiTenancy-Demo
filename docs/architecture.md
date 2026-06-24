@@ -278,9 +278,54 @@ Spoke Cluster (blue):
 
 ---
 
+## Feature Maturity: ArgoCD Agent
+
+The ArgoCD Agent feature is **Generally Available (GA)** as of Red Hat OpenShift GitOps 1.19 (March 2026). It was previously available as Technology Preview in GitOps 1.17 and 1.18.
+
+### Version Compatibility
+
+| GitOps Version | Agent Status | Supported OCP Versions |
+|----------------|-------------|------------------------|
+| 1.17 | Tech Preview | 4.12-4.19 |
+| 1.18 | Tech Preview | 4.14, 4.16-4.20 |
+| 1.19 | **GA** | 4.14, 4.16-4.21 |
+| 1.20 | **GA** | 4.14, 4.16-4.21 |
+
+**OCP 4.22 Note:** As of June 2026, the OpenShift GitOps operator installs and functions on OCP 4.22 via OLM but is not yet officially listed in the 1.20 support matrix. A future GitOps release will add 4.22 to the compatibility matrix.
+
+### GA Capabilities
+
+- Agent-based pull architecture (managed and autonomous modes)
+- mTLS-secured gRPC communication between Principal and Agents
+- FIPS-validated cryptographic modules
+- Agent installation via ArgoCD custom resource (GitOps 1.20+)
+- Agent installation via Helm charts
+- Centralized observability (single pane of glass) on the hub cluster
+
+### Known Limitations (as of GitOps 1.20)
+
+- No high availability for the Principal component
+- Partial ApplicationSet support
+- Limited App-of-Apps pattern support in managed mode
+- No pod log streaming or terminal access from the control plane
+- Advanced RBAC and multi-tenancy under development
+- Limited "Applications in any namespace" on workload clusters
+
+### Licensing
+
+ArgoCD Agent requires an **OpenShift Platform Plus** subscription for each agent (spoke) cluster.
+
+---
+
 ## References
 
+- [OpenShift GitOps 1.19 Release Notes (GA Announcement)](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.19/html/release_notes/gitops-release-notes)
+- [ArgoCD Agent Architecture Overview](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.20/html/argo_cd_agent_architecture/argocd-agent-architecture)
+- [ArgoCD Agent Installation Guide](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.20/html-single/argo_cd_agent_installation/)
+- [OCP 4.22 GitOps Integration](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/gitops/index)
 - [Fleet-Scale GitOps Control Flow with RHACM](https://medium.com/@tcij1013/fleet-scale-gitops-control-flow-with-red-hat-advanced-cluster-management-0eca855136c3)
+- [OpenShift GitOps ArgoCD Agent (Community Blog)](https://blog.stderr.at/gitopscollection/2026-01-14-argocd-agent/)
+- [Supercharge Your GitOps with ArgoCD Agent — DevConf.IN 2026](https://www.youtube.com/watch?v=jUmW8X6fv6w)
 - [RHACM Documentation](https://access.redhat.com/documentation/en-us/red_hat_advanced_cluster_management_for_kubernetes/2.15)
 - [OpenShift GitOps Documentation](https://docs.openshift.com/gitops/latest/understanding_openshift_gitops/about-redhat-openshift-gitops.html)
 - [RHACM Workshop — Module 01](https://tosin2013.github.io/rhacm-workshop/modules/01-installation.html)

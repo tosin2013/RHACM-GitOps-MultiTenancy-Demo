@@ -1,3 +1,6 @@
+# NOTE: This file is a reference template. In production, the agent ArgoCD CR
+# is generated dynamically by scripts/setup-agent-tls.sh which discovers the
+# Principal route at runtime. The principalServerAddress below is a placeholder.
 ---
 apiVersion: v1
 kind: Namespace
@@ -16,7 +19,7 @@ spec:
     agent:
       enabled: true
       client:
-        principalServerAddress: "fleet-argocd-agent-principal-fleet-gitops.apps.cluster-48qth.dynamic2.redhatworkshops.io"
+        principalServerAddress: "<DISCOVERED_AT_RUNTIME_BY_setup-agent-tls.sh>"
         principalServerPort: "443"
       tls:
         rootCASecretName: argocd-agent-ca

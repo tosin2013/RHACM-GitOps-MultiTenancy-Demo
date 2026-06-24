@@ -1,8 +1,40 @@
 # Deployment Guide: Principal/Agent Fleet GitOps
 
+> **Feature Status:** ArgoCD Agent is **Generally Available** since OpenShift GitOps 1.19 (March 2026).
+> See [Release Notes](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.19/html/release_notes/gitops-release-notes) for details.
+
+## Automated Deployment
+
+For RHPDS environments or quick setup, use the one-command orchestrator:
+
+```bash
+bash scripts/deploy-demo.sh
+```
+
+This auto-detects your environment (base domain, Keycloak, AWS creds) and runs all steps below.
+Use `--skip-clusters` if spoke clusters already exist, or `--dry-run` to preview actions.
+See [RHPDS Quickstart](rhpds-quickstart.md) for environment-specific details.
+
+---
+
+## Version Requirements
+
+| Component | Minimum Version | Notes |
+|-----------|----------------|-------|
+| OpenShift GitOps | **1.19** | ArgoCD Agent GA ([Release Notes](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.19/html/release_notes/gitops-release-notes)) |
+| OpenShift Container Platform | 4.14+ | Per [compatibility matrix](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.20/html/release_notes/gitops-release-notes#compatibility-and-support-matrix) |
+| RHACM | 2.15+ | Multi-cluster management |
+| cert-manager Operator | Any | mTLS certificate automation |
+| Subscription | OpenShift Platform Plus | Required per agent cluster |
+
+**OCP 4.22:** The GitOps operator functions on OCP 4.22 via OLM but is not yet listed in the 1.20 support matrix. Official certification expected in a future GitOps release.
+
+---
+
 ## Prerequisites
 
 - 1 OpenShift hub cluster with RHACM 2.15+ installed
+- OpenShift GitOps operator >= 1.19 (ArgoCD Agent GA)
 - AWS credentials with permissions to create EC2 instances, VPCs, and Route53 records
 - OpenShift pull secret from https://console.redhat.com/openshift/install/pull-secret
 - SSH keypair for cluster node access
@@ -110,7 +142,27 @@ oc apply -k ./AcmPolicies/FleetArgoCD
 oc apply -k ./AcmPolicies/RegisterAllClustersToFleet
 ```
 
-## Step 7: Generate mTLS Certificates
+## Step 7: Setup mTLS Certificates (cert-manager — Recommended)
+
+The recommended approach uses cert-manager to automate certificate lifecycle:
+
+```bash
+bash scripts/setup-agent-tls.sh \
+  --blue-kubeconfig /tmp/blue-cluster-kubeconfig \
+  --red-kubeconfig /tmp/red-cluster-kubeconfig
+```
+
+This script:
+1. Installs the cert-manager operator (if missing)
+2. Creates a CA Issuer chain in the `fleet-gitops` namespace
+3. Discovers the Principal passthrough route automatically
+4. Issues server and client certificates
+5. Deploys certs and Agent CRs to both spoke clusters
+
+For more details, see [ArgoCD Agent Installation Guide](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.20/html-single/argo_cd_agent_installation/).
+
+<details>
+<summary>Alternative: Manual OpenSSL certificates (deprecated)</summary>
 
 ```bash
 bash certs/generate-certs.sh
@@ -135,6 +187,11 @@ oc create secret generic argocd-agent-jwt -n fleet-gitops \
   --from-file=jwt.key=/tmp/jwt.key
 rm /tmp/jwt.key
 ```
+
+> **Note:** This method requires manual certificate rotation and does not handle Agent CR deployment.
+> Prefer `scripts/setup-agent-tls.sh` for production use.
+
+</details>
 
 Grant Principal RBAC:
 
