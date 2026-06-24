@@ -13,6 +13,14 @@ set -euo pipefail
 # Usage:
 #   ./setup-agent-tls.sh [--blue-kubeconfig PATH] [--red-kubeconfig PATH]
 
+# Cross-platform base64 decode (macOS uses -D, Linux uses -d)
+b64decode() {
+  case "$(uname -s)" in
+    Darwin) base64 -D ;;
+    *)      base64 -d ;;
+  esac
+}
+
 PRINCIPAL_NS="${PRINCIPAL_NS:-fleet-gitops}"
 ARGOCD_NAME="${ARGOCD_NAME:-fleet-argocd}"
 BLUE_NS="argocd-agent-blue-cluster"
@@ -217,7 +225,7 @@ oc patch argocd "$ARGOCD_NAME" -n "$PRINCIPAL_NS" --type merge -p '{
 }'
 
 # Ensure argocd-agent-ca on hub uses the cert-manager CA
-CA_CRT=$(oc get secret argocd-agent-root-ca -n "$PRINCIPAL_NS" -o jsonpath='{.data.ca\.crt}' | base64 -d)
+CA_CRT=$(oc get secret argocd-agent-root-ca -n "$PRINCIPAL_NS" -o jsonpath='{.data.ca\.crt}' | b64decode)
 oc delete secret argocd-agent-ca -n "$PRINCIPAL_NS" 2>/dev/null || true
 oc create secret generic argocd-agent-ca --from-literal=ca.crt="$CA_CRT" -n "$PRINCIPAL_NS"
 
@@ -227,8 +235,8 @@ sleep 5
 
 # Deploy CA and client certs to blue-cluster
 echo "  Deploying certs to blue-cluster..."
-BLUE_CRT=$(oc get secret argocd-agent-blue-client-tls -n "$PRINCIPAL_NS" -o jsonpath='{.data.tls\.crt}' | base64 -d)
-BLUE_KEY=$(oc get secret argocd-agent-blue-client-tls -n "$PRINCIPAL_NS" -o jsonpath='{.data.tls\.key}' | base64 -d)
+BLUE_CRT=$(oc get secret argocd-agent-blue-client-tls -n "$PRINCIPAL_NS" -o jsonpath='{.data.tls\.crt}' | b64decode)
+BLUE_KEY=$(oc get secret argocd-agent-blue-client-tls -n "$PRINCIPAL_NS" -o jsonpath='{.data.tls\.key}' | b64decode)
 
 KUBECONFIG="$BLUE_KUBECONFIG" oc create namespace "$BLUE_NS" --dry-run=client -o yaml | KUBECONFIG="$BLUE_KUBECONFIG" oc apply -f -
 KUBECONFIG="$BLUE_KUBECONFIG" oc delete secret argocd-agent-ca -n "$BLUE_NS" 2>/dev/null || true
@@ -240,8 +248,8 @@ rm -f /tmp/_blue.crt /tmp/_blue.key
 
 # Deploy CA and client certs to red-cluster
 echo "  Deploying certs to red-cluster..."
-RED_CRT=$(oc get secret argocd-agent-red-client-tls -n "$PRINCIPAL_NS" -o jsonpath='{.data.tls\.crt}' | base64 -d)
-RED_KEY=$(oc get secret argocd-agent-red-client-tls -n "$PRINCIPAL_NS" -o jsonpath='{.data.tls\.key}' | base64 -d)
+RED_CRT=$(oc get secret argocd-agent-red-client-tls -n "$PRINCIPAL_NS" -o jsonpath='{.data.tls\.crt}' | b64decode)
+RED_KEY=$(oc get secret argocd-agent-red-client-tls -n "$PRINCIPAL_NS" -o jsonpath='{.data.tls\.key}' | b64decode)
 
 KUBECONFIG="$RED_KUBECONFIG" oc create namespace "$RED_NS" --dry-run=client -o yaml | KUBECONFIG="$RED_KUBECONFIG" oc apply -f -
 KUBECONFIG="$RED_KUBECONFIG" oc delete secret argocd-agent-ca -n "$RED_NS" 2>/dev/null || true

@@ -22,6 +22,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Cross-platform base64 decode (macOS uses -D, Linux uses -d)
+b64decode() {
+  case "$(uname -s)" in
+    Darwin) base64 -D ;;
+    *)      base64 -d ;;
+  esac
+}
+
 SKIP_USERS=false
 SKIP_CLUSTERS=false
 SKIP_TLS=false
@@ -40,7 +48,7 @@ while [[ $# -gt 0 ]]; do
     --pull-secret)   PULL_SECRET="$2"; shift 2 ;;
     --base-domain)   BASE_DOMAIN_OVERRIDE="$2"; shift 2 ;;
     --help)
-      head -20 "$0" | grep "^#" | sed 's/^# \?//'
+      head -20 "$0" | grep "^#" | sed 's/^#[[:space:]]*//'
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -153,18 +161,61 @@ else
   echo "  Pull Secret:  $PULL_SECRET"
 fi
 
-# Check AWS credentials
+# Check and provision AWS credentials
 AWS_CREDS_AVAILABLE=false
 if oc get secret aws-credentials -n aws-credentials &>/dev/null 2>&1; then
   AWS_CREDS_AVAILABLE=true
   echo "  AWS Creds:    Found (aws-credentials/aws-credentials)"
 elif [[ -f "$HOME/.aws/credentials" ]]; then
   AWS_CREDS_AVAILABLE=true
-  echo "  AWS Creds:    Found (~/.aws/credentials)"
+  echo "  AWS Creds:    Found (~/.aws/credentials) — will create cluster secret"
+  if ! $SKIP_CLUSTERS && ! $DRY_RUN; then
+    echo "  Creating aws-credentials secret from ~/.aws/credentials..."
+    AWS_KEY=$(grep -m1 aws_access_key_id "$HOME/.aws/credentials" | awk -F'=' '{print $2}' | xargs)
+    AWS_SECRET=$(grep -m1 aws_secret_access_key "$HOME/.aws/credentials" | awk -F'=' '{print $2}' | xargs)
+    if [[ -z "$AWS_KEY" || -z "$AWS_SECRET" ]]; then
+      echo "  ERROR: Could not parse AWS credentials from ~/.aws/credentials"
+      echo "  Expected format:"
+      echo "    [default]"
+      echo "    aws_access_key_id = AKIA..."
+      echo "    aws_secret_access_key = wJal..."
+      exit 1
+    fi
+    oc create namespace aws-credentials --dry-run=client -o yaml | oc apply -f -
+    oc create secret generic aws-credentials -n aws-credentials \
+      --from-literal=aws_access_key_id="$AWS_KEY" \
+      --from-literal=aws_secret_access_key="$AWS_SECRET" \
+      --dry-run=client -o yaml | oc apply -f -
+    oc label secret aws-credentials -n aws-credentials \
+      cluster.open-cluster-management.io/type=aws \
+      cluster.open-cluster-management.io/credentials="" 2>/dev/null || true
+    # Attach pull-secret and SSH key to the ACM credential if available
+    if [[ -f "$PULL_SECRET" ]]; then
+      oc set data secret/aws-credentials -n aws-credentials \
+        --from-file=pullSecret="$PULL_SECRET" 2>/dev/null || true
+    fi
+    if [[ -f "$HOME/.ssh/id_rsa.pub" ]]; then
+      oc set data secret/aws-credentials -n aws-credentials \
+        --from-file=ssh-publickey="$HOME/.ssh/id_rsa.pub" \
+        --from-file=ssh-privatekey="$HOME/.ssh/id_rsa" 2>/dev/null || true
+    fi
+    oc set data secret/aws-credentials -n aws-credentials \
+      --from-literal=baseDomain="$BASE_DOMAIN" 2>/dev/null || true
+    echo "  AWS credential created on cluster."
+  fi
 else
   echo "  AWS Creds:    Not found"
   if ! $SKIP_CLUSTERS; then
-    echo "  WARNING: Cluster provisioning requires AWS credentials."
+    echo ""
+    echo "  ERROR: Cluster provisioning requires AWS credentials."
+    echo "  Option 1: Place credentials at ~/.aws/credentials"
+    echo "  Option 2: Create the secret manually:"
+    echo "    oc create namespace aws-credentials --dry-run=client -o yaml | oc apply -f -"
+    echo "    oc create secret generic aws-credentials -n aws-credentials \\"
+    echo "      --from-literal=aws_access_key_id=\"<KEY>\" \\"
+    echo "      --from-literal=aws_secret_access_key=\"<SECRET>\""
+    echo "  See docs/deployment-guide.md Step 4 for full details."
+    exit 1
   fi
 fi
 
@@ -256,12 +307,25 @@ else
 
   echo "[4.2] Generating cluster provisioning manifests..."
   export BASE_DOMAIN
+  export SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-}"
+  [[ -f "$HOME/.ssh/id_rsa.pub" ]] && SSH_PUBLIC_KEY=$(cat "$HOME/.ssh/id_rsa.pub")
+  export CLUSTER_IMAGE_SET="${CLUSTER_IMAGE_SET:-img4.21.20-multi-appsub}"
+
   for CLUSTER in blue-cluster red-cluster; do
     TEMPLATE="$REPO_DIR/cluster-provisioning/${CLUSTER}.yaml.tpl"
     OUTPUT="$REPO_DIR/cluster-provisioning/${CLUSTER}.yaml"
     if [[ -f "$TEMPLATE" ]]; then
       echo "  Generating $CLUSTER manifest from template (baseDomain=$BASE_DOMAIN)..."
-      run envsubst < "$TEMPLATE" > "$OUTPUT"
+      if command -v envsubst &>/dev/null; then
+        run envsubst < "$TEMPLATE" > "$OUTPUT"
+      else
+        echo "  (envsubst not found — using sed fallback)"
+        run sed -e "s|\${BASE_DOMAIN}|${BASE_DOMAIN}|g" \
+                -e "s|\${SSH_PUBLIC_KEY}|${SSH_PUBLIC_KEY}|g" \
+                -e "s|\${CLUSTER_IMAGE_SET:-[^}]*}|${CLUSTER_IMAGE_SET}|g" \
+                -e "s|\${CLUSTER_IMAGE_SET}|${CLUSTER_IMAGE_SET}|g" \
+                "$TEMPLATE" > "$OUTPUT"
+      fi
     else
       echo "  Using existing $CLUSTER manifest (no template found)."
     fi
@@ -279,8 +343,8 @@ else
       fi
       # Copy AWS credentials to cluster namespace if available on cluster
       if oc get secret aws-credentials -n aws-credentials &>/dev/null; then
-        AWS_KEY=$(oc get secret aws-credentials -n aws-credentials -o jsonpath='{.data.aws_access_key_id}' | base64 -d)
-        AWS_SECRET_KEY=$(oc get secret aws-credentials -n aws-credentials -o jsonpath='{.data.aws_secret_access_key}' | base64 -d)
+        AWS_KEY=$(oc get secret aws-credentials -n aws-credentials -o jsonpath='{.data.aws_access_key_id}' | b64decode)
+        AWS_SECRET_KEY=$(oc get secret aws-credentials -n aws-credentials -o jsonpath='{.data.aws_secret_access_key}' | b64decode)
         oc create secret generic aws-credentials -n "$NS" \
           --from-literal=aws_access_key_id="$AWS_KEY" \
           --from-literal=aws_secret_access_key="$AWS_SECRET_KEY" \
@@ -358,7 +422,7 @@ else
     RED_SECRET=$(oc get clusterdeployment red-cluster -n red-cluster -o jsonpath='{.spec.clusterMetadata.adminKubeconfigSecretRef.name}' 2>/dev/null || echo "")
 
     if [[ -n "$BLUE_SECRET" ]]; then
-      oc get secret "$BLUE_SECRET" -n blue-cluster -o jsonpath='{.data.kubeconfig}' | base64 -d > "$BLUE_KUBECONFIG"
+      oc get secret "$BLUE_SECRET" -n blue-cluster -o jsonpath='{.data.kubeconfig}' | b64decode > "$BLUE_KUBECONFIG"
       echo "  Blue kubeconfig extracted to $BLUE_KUBECONFIG"
     elif [[ -f "$BLUE_KUBECONFIG" ]]; then
       echo "  Using existing $BLUE_KUBECONFIG"
@@ -369,7 +433,7 @@ else
     fi
 
     if [[ -n "$RED_SECRET" ]]; then
-      oc get secret "$RED_SECRET" -n red-cluster -o jsonpath='{.data.kubeconfig}' | base64 -d > "$RED_KUBECONFIG"
+      oc get secret "$RED_SECRET" -n red-cluster -o jsonpath='{.data.kubeconfig}' | b64decode > "$RED_KUBECONFIG"
       echo "  Red kubeconfig extracted to $RED_KUBECONFIG"
     elif [[ -f "$RED_KUBECONFIG" ]]; then
       echo "  Using existing $RED_KUBECONFIG"
@@ -415,7 +479,7 @@ banner "Deployment Complete"
 # ============================================================================
 
 ARGOCD_ROUTE=$(oc get route fleet-argocd-server -n fleet-gitops -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
-ARGOCD_PASSWORD=$(oc get secret fleet-argocd-cluster -n fleet-gitops -o jsonpath='{.data.admin\.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+ARGOCD_PASSWORD=$(oc get secret fleet-argocd-cluster -n fleet-gitops -o jsonpath='{.data.admin\.password}' 2>/dev/null | b64decode 2>/dev/null || echo "")
 
 echo ""
 echo "  ArgoCD UI:  https://${ARGOCD_ROUTE:-<not-found>}"

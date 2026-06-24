@@ -9,6 +9,22 @@ set -euo pipefail
 # Usage:
 #   ./setup-users.sh [--password PASSWORD] [--force-htpasswd]
 
+if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+  echo "ERROR: This script requires bash 4+ (for associative arrays)."
+  echo "  macOS ships bash 3.x by default. Install newer bash:"
+  echo "    brew install bash"
+  echo "  Then run: /opt/homebrew/bin/bash $0 $*"
+  exit 1
+fi
+
+# Cross-platform base64 decode (macOS uses -D, Linux uses -d)
+b64decode() {
+  case "$(uname -s)" in
+    Darwin) base64 -D ;;
+    *)      base64 -d ;;
+  esac
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 USER_PASSWORD="${USER_PASSWORD:-openshift}"
@@ -72,8 +88,8 @@ setup_keycloak() {
   echo "Keycloak URL: $KC_URL"
 
   # Get admin credentials from the initial-admin secret
-  KC_ADMIN_USER=$(oc get secret keycloak-initial-admin -n "$KEYCLOAK_NS" -o jsonpath='{.data.username}' | base64 -d)
-  KC_ADMIN_PASS=$(oc get secret keycloak-initial-admin -n "$KEYCLOAK_NS" -o jsonpath='{.data.password}' | base64 -d)
+  KC_ADMIN_USER=$(oc get secret keycloak-initial-admin -n "$KEYCLOAK_NS" -o jsonpath='{.data.username}' | b64decode)
+  KC_ADMIN_PASS=$(oc get secret keycloak-initial-admin -n "$KEYCLOAK_NS" -o jsonpath='{.data.password}' | b64decode)
 
   # Get admin token
   TOKEN=$(curl -sk "$KC_URL/realms/master/protocol/openid-connect/token" \
