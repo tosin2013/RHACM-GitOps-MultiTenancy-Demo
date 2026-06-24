@@ -175,6 +175,35 @@ spec:
     group: cert-manager.io
 EOF
 oc wait --for=condition=Ready certificate/argocd-agent-principal-tls -n "$PRINCIPAL_NS" --timeout=60s
+
+# Issue resource proxy certificate (required by Principal for hub UI status streaming)
+echo "  Issuing resource proxy TLS certificate..."
+oc apply -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: argocd-agent-resource-proxy-tls
+  namespace: $PRINCIPAL_NS
+spec:
+  secretName: argocd-agent-resource-proxy-tls
+  duration: 8760h
+  renewBefore: 720h
+  isCA: false
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - server auth
+  dnsNames:
+    - "${ARGOCD_NAME}-agent-principal-redisproxy"
+    - "${ARGOCD_NAME}-agent-principal-redisproxy.${PRINCIPAL_NS}.svc"
+    - "${ARGOCD_NAME}-agent-principal-redisproxy.${PRINCIPAL_NS}.svc.cluster.local"
+  issuerRef:
+    name: argocd-agent-ca-issuer
+    kind: Issuer
+    group: cert-manager.io
+EOF
+oc wait --for=condition=Ready certificate/argocd-agent-resource-proxy-tls -n "$PRINCIPAL_NS" --timeout=60s
 echo ""
 
 # --- Step 5: Issue agent client certificates ---

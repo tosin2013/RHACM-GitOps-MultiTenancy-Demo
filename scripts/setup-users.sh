@@ -155,7 +155,7 @@ setup_keycloak() {
     # Assign to group
     USER_ID=$(curl -sk "$KC_URL/admin/realms/sso/users?username=$USER&exact=true" \
       -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json; users=json.loads(sys.stdin.read()); print(users[0]['id'] if users else '')" 2>/dev/null)
-    GID="${GROUP_IDS[$GROUP]}"
+    GID="${GROUP_IDS[$GROUP]:-}"
     if [[ -n "$USER_ID" && -n "$GID" ]]; then
       curl -sk -o /dev/null -X PUT "$KC_URL/admin/realms/sso/users/$USER_ID/groups/$GID" \
         -H "Authorization: Bearer $TOKEN" \
@@ -167,7 +167,7 @@ setup_keycloak() {
   ADMIN_ID=$(curl -sk "$KC_URL/admin/realms/sso/users?username=admin&exact=true" \
     -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json; users=json.loads(sys.stdin.read()); print(users[0]['id'] if users else '')" 2>/dev/null)
   if [[ -n "$ADMIN_ID" ]]; then
-    curl -sk -o /dev/null -X PUT "$KC_URL/admin/realms/sso/users/$ADMIN_ID/groups/${GROUP_IDS[acm-sre-group]}" \
+    curl -sk -o /dev/null -X PUT "$KC_URL/admin/realms/sso/users/$ADMIN_ID/groups/${GROUP_IDS[acm-sre-group]:-}" \
       -H "Authorization: Bearer $TOKEN" \
       -H "Content-Type: application/json"
     echo "  Added admin to acm-sre-group"

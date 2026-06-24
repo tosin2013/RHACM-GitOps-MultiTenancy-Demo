@@ -267,11 +267,15 @@ banner "Phase 3: Deploy Principal (fleet-argocd)"
 echo "[3.1] Applying Fleet ArgoCD policy..."
 run oc apply -k "$REPO_DIR/AcmPolicies/FleetArgoCD"
 
+# NOTE: The Principal pod will CrashLoop until TLS certs are configured in Phase 5.
+# This is expected — the route must exist first so setup-agent-tls.sh can discover it.
 echo "[3.2] Waiting for fleet-argocd Principal pods..."
+echo "  (Principal may CrashLoop until TLS is configured in Phase 5 — this is normal)"
 if ! $DRY_RUN; then
   sleep 10
   for i in $(seq 1 60); do
-    READY=$(oc get pods -n fleet-gitops -l app.kubernetes.io/part-of=argocd --no-headers 2>/dev/null | grep -c Running || echo 0)
+    READY=$(oc get pods -n fleet-gitops -l app.kubernetes.io/part-of=argocd --no-headers 2>/dev/null | grep -c Running || true)
+    READY=${READY:-0}
     if [[ "$READY" -ge 3 ]]; then
       echo "  fleet-argocd pods ready ($READY running)."
       break
